@@ -1,0 +1,78 @@
+{
+  "users": [
+    {
+      "id": "u_admin",
+      "username": "admin",
+      "displayName": "Admin",
+      "passwordHash": "$2a$10$tGq5xcmDDNTMMnVmcIYnJuGMduJy457tvELHEE.T9SVMXOHdQBwBO",
+      "role": "admin",
+      "enabled": true,
+      "online": true,
+      "lastSeen": "2026-09-30T16:11:11.659Z",
+      "sessionId": "65ec4f2c-8a9f-42f5-a3c0-9697998529ed",
+      "initials": "AD",
+      "showLastSeen": true,
+      "publicKey": null
+    },
+    {
+      "id": "u_007",
+      "username": "vishal",
+      "displayName": "Vishal",
+      "passwordHash": "$2a$10$/3Qyn9ZuH1giT0y/OjrenOqwReQ5qtUVzycT5.CrHU7tyHnn0AuqW",
+      "role": "user",
+      "enabled": true,
+      "online": false,
+      "lastSeen": "2026-09-30T16:20:33.184Z",
+      "sessionId": "b8c66ad5-ba74-4085-9eb1-04d84f3ae745",
+      "initials": "VI",
+      "showLastSeen": true,
+      "publicKey": {
+        "key_ops": [],
+        "ext": true,
+        "kty": "EC",
+        "x": "dqIiQbSWq9aoJBeCW9WMJrVl1-v8N_GzF8ApncINw6U",
+        "y": "DAvmhcYCA8JBRURVoMsC12JneQTP8SJY3aRGgaBWIp8",
+        "crv": "P-256"
+      }
+    },
+    {
+      "id": "u_008",
+      "username": "kashish",
+      "displayName": "Kashish",
+      "passwordHash": "$2a$10$P289i6hY3xNcjepcXIlOlOnb12iITGAWCUy3ZL3JJ4N56WXKZIoKC",
+      "role": "user",
+      "enabled": true,
+      "online": true,
+      "lastSeen": "2026-09-30T16:20:33.140Z",
+      "sessionId": "123bebd8-af36-45cc-a193-521b5d87fbb3",
+      "initials": "KA",
+      "showLastSeen": true,
+      "publicKey": {
+        "key_ops": [],
+        "ext": true,
+        "kty": "EC",
+        "x": "xvTMMLoaGQMzroMmYY4SQs32YMJbH_z2-JMf2rkBto8",
+        "y": "hwSqcabOS4pVIkyRwiTP7ZbN7-SWySz5iGVFGWJ5yxI",
+        "crv": "P-256"
+      }
+    }
+  ],
+  "messages": [
+    {
+      "id": "m_00004",
+      "pairKey": "u_007__u_008",
+      "fromId": "u_007",
+      "toId": "u_008",
+      "type": "text",
+      "encryptedPayload": "UX1sfhevnrDM9DWIaxInnRim8VU01/y+bYpEsFBcSsAAHSBlIcTlt+JXm1TacXHiD4odmyZoWSsRe8qsS1QngSoxLq5+HHrnW7H5pA==",
+      "iv": "c4FI2pY02R29+tQw",
+      "fileName": null,
+      "mimeType": null,
+      "createdAt": "2026-09-30T16:20:33.164Z",
+      "seenAt": null,
+      "hiddenFor": []
+    }
+  ],
+  "nextUserId": 9,
+  "nextMessageId": 5
+}

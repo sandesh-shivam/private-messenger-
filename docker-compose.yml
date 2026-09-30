@@ -1,0 +1,27 @@
+services:
+  messenger:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: private_messenger
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - JWT_SECRET=${JWT_SECRET:-generate_a_random_jwt_secret_here}
+      - CLIENT_ORIGIN=${CLIENT_ORIGIN:-http://localhost:5173,https://learnai123.duckdns.org}
+      - DATA_FILE_PATH=/app/server/data/data.json
+    volumes:
+      - messenger_data:/app/server/data
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  messenger_data:
+    driver: local

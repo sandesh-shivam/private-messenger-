@@ -44,11 +44,8 @@ This is a starter project and demo architecture. The encrypted payload flow is i
 
 ## Demo logins
 - Admin: `admin / admin123`
-- User: `rahul01 / pass123!`
-- User: `aman01 / pass123!`
-- User: `neha01 / pass123!`
-- User: `vivek01 / pass123!`
-- User: `kajal01 / pass123!`
+- User: `vishal / pass123!`
+- User: `kashish / pass123!`
 
 ## Run locally
 
@@ -72,15 +69,49 @@ npm run dev
 - Client: http://localhost:5173
 - Server: http://localhost:4000
 
-## Build
+## Production Deployment
+
+### Option A: Docker (Recommended)
 ```bash
-npm run build
+# 1) Start container with persistent data volume
+docker compose up -d --build
+
+# 2) View logs
+docker compose logs -f
 ```
 
+### Option B: PM2 (Node process manager)
+```bash
+# 1) Build client and verify server
+npm run build
+
+# 2) Start server with PM2
+pm2 start ecosystem.config.cjs --env production
+
+# 3) Save PM2 process list for auto-boot on server restart
+pm2 save
+pm2 startup
+```
+
+### Option C: Direct Node production run
+```bash
+# 1) Build client
+npm run build
+
+# 2) Run production server (serves both API & Frontend SPA)
+NODE_ENV=production PORT=4000 node server/index.js
+```
+
+### Production Security Checklist
+- Set a strong, random `JWT_SECRET` in `server/.env`.
+- Ensure `CLIENT_ORIGIN` lists your production domain(s).
+- Run behind HTTPS (e.g. Nginx, Caddy, Cloudflare, or Let's Encrypt).
+- Atomic persistence with automated `.bak` backups prevents data corruption.
+- API rate limiting (`express-rate-limit`) and security headers (`helmet`) are enabled by default.
+
 ## Notes
-- Messages are encrypted in the browser before being sent.
-- If both users are online, the server forwards the encrypted payload without storing it.
-- If a user is offline, encrypted payloads are stored temporarily.
-- Seen messages are removed on the next chat refresh/load.
-- Call history is not stored.
-- No notifications are included.
+- Messages are end-to-end encrypted (ECDH + AES-GCM) in the browser before being sent.
+- If both users are online, the server forwards the encrypted payload in real time.
+- If a user is offline, encrypted payloads are stored temporarily until seen.
+- Call history is ephemeral (WebRTC signaling only).
+

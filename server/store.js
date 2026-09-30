@@ -3,21 +3,61 @@ import fs from 'fs';
 import path from 'path';
 
 export const rootDir = process.cwd();
-export const dataFile = path.join(rootDir, 'data.json');
+export const dataFile = process.env.DATA_FILE_PATH || path.join(rootDir, 'data.json');
+export const backupFile = `${dataFile}.bak`;
+export const tempFile = `${dataFile}.tmp`;
 
 export const loadStore = () => {
-  if (!fs.existsSync(dataFile)) return null;
-  try {
-    const raw = fs.readFileSync(dataFile, 'utf-8');
-    if (!raw || !raw.trim()) return null;
-    return JSON.parse(raw);
-  } catch {
-    return null;
+  const tryParse = (filepath) => {
+    if (!fs.existsSync(filepath)) return null;
+    try {
+      const raw = fs.readFileSync(filepath, 'utf-8');
+      if (!raw || !raw.trim()) return null;
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+
+  const primary = tryParse(dataFile);
+  if (primary) return primary;
+
+  // Fallback to backup if main file is corrupted or missing
+  const backup = tryParse(backupFile);
+  if (backup) {
+    console.warn(`[WARN] Primary data store corrupted or missing. Restored from backup: ${backupFile}`);
+    try {
+      fs.copyFileSync(backupFile, dataFile);
+    } catch {}
+    return backup;
   }
+
+  return null;
 };
 
 export const saveStore = (store) => {
-  fs.writeFileSync(dataFile, JSON.stringify(store, null, 2), 'utf-8');
+  const content = JSON.stringify(store, null, 2);
+  try {
+    // 1. Write atomically to temp file
+    fs.writeFileSync(tempFile, content, 'utf-8');
+
+    // 2. Backup existing valid data file
+    if (fs.existsSync(dataFile)) {
+      try {
+        fs.copyFileSync(dataFile, backupFile);
+      } catch {}
+    }
+
+    // 3. Atomically replace data file
+    fs.renameSync(tempFile, dataFile);
+  } catch (err) {
+    console.error('[ERROR] Failed atomic save, falling back to direct write:', err);
+    try {
+      fs.writeFileSync(dataFile, content, 'utf-8');
+    } catch (fallbackErr) {
+      console.error('[CRITICAL] Direct save also failed:', fallbackErr);
+    }
+  }
 };
 
 export const seedStore = async () => {
@@ -38,51 +78,9 @@ export const seedStore = async () => {
       publicKey: null
     },
     {
-      id: 'u_rahul',
-      username: 'rahul01',
-      displayName: 'Rahul',
-      passwordHash: await bcrypt.hash('pass123!', 10),
-      role: 'user',
-      enabled: true,
-      online: false,
-      lastSeen: now,
-      sessionId: null,
-      initials: 'RA',
-      showLastSeen: true,
-      publicKey: null
-    },
-    {
-      id: 'u_aman',
-      username: 'aman01',
-      displayName: 'Aman',
-      passwordHash: await bcrypt.hash('pass123!', 10),
-      role: 'user',
-      enabled: true,
-      online: false,
-      lastSeen: now,
-      sessionId: null,
-      initials: 'AM',
-      showLastSeen: true,
-      publicKey: null
-    },
-    {
-      id: 'u_neha',
-      username: 'neha01',
-      displayName: 'Neha',
-      passwordHash: await bcrypt.hash('pass123!', 10),
-      role: 'user',
-      enabled: true,
-      online: false,
-      lastSeen: now,
-      sessionId: null,
-      initials: 'NE',
-      showLastSeen: true,
-      publicKey: null
-    },
-    {
-      id: 'u_vivek',
-      username: 'vivek01',
-      displayName: 'Vivek',
+      id: 'u_vishal',
+      username: 'vishal',
+      displayName: 'Vishal',
       passwordHash: await bcrypt.hash('pass123!', 10),
       role: 'user',
       enabled: true,
@@ -94,9 +92,9 @@ export const seedStore = async () => {
       publicKey: null
     },
     {
-      id: 'u_kajal',
-      username: 'kajal01',
-      displayName: 'Kajal',
+      id: 'u_kashish',
+      username: 'kashish',
+      displayName: 'Kashish',
       passwordHash: await bcrypt.hash('pass123!', 10),
       role: 'user',
       enabled: true,
@@ -108,7 +106,7 @@ export const seedStore = async () => {
       publicKey: null
     }
   ];
-  const store = { users, messages: [], nextUserId: 7, nextMessageId: 1 };
+  const store = { users, messages: [], nextUserId: 3, nextMessageId: 1 };
   saveStore(store);
   return store;
 };

@@ -5,6 +5,11 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
+import helmet from 'helmet';
+import compression from 'compression';
+import rateLimit from 'express-rate-limit';
 import { Server } from 'socket.io';
 import {
   ensureStore,
@@ -15,27 +20,100 @@ import {
   createUserId,
   createMessageId,
   fmtLastSeen,
-  initialsFromName
+  initialsFromName,
+  rootDir
 } from './store.js';
 
 dotenv.config();
 
 const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
-const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+
+if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'dev-secret-change-me') {
+  console.warn('⚠️ [SECURITY WARNING] Default JWT_SECRET is in use in production! Set a secure random string in .env.');
+}
+
+const rawOrigins = process.env.CLIENT_ORIGIN || 'http://localhost:5173,https://learnai123.duckdns.org';
+const allowedOrigins = rawOrigins.split(',').map((o) => o.trim()).filter(Boolean);
+
+const isOriginAllowed = (origin) => {
+  if (!origin) return true; // Server-to-server, curl, mobile apps
+  if (allowedOrigins.includes('*')) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  try {
+    const originUrl = new URL(origin);
+    return allowedOrigins.some((allowed) => {
+      if (allowed === origin) return true;
+      try {
+        const allowedUrl = new URL(allowed);
+        return allowedUrl.hostname === originUrl.hostname;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+};
 
 const app = express();
-app.use(cors({ origin: CLIENT_ORIGIN, credentials: true }));
-app.use(express.json({ limit: '20mb' }));
+
+// Trust reverse proxy (Nginx, Caddy, Cloudflare, etc.)
+app.set('trust proxy', 1);
+
+// Security headers
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+
+// Gzip/deflate compression
+app.use(compression());
+
+// CORS
+app.use(cors({
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) callback(null, true);
+    else callback(new Error(`CORS error: Origin ${origin} not allowed`));
+  },
+  credentials: true
+}));
+
+app.use(express.json({ limit: '25mb' }));
+
+// Rate limiting
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 2000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests from this IP, please try again later.' }
+});
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please wait 15 minutes before trying again.' }
+});
+
+app.use('/api/', apiLimiter);
+app.use('/api/login', loginLimiter);
 
 let store = await ensureStore();
 const socketsByUserId = new Map();
 
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: CLIENT_ORIGIN, credentials: true },
-  // Default is 1MB, which is too small for base64 photo/document payloads.
-  maxHttpBufferSize: 20 * 1024 * 1024
+  cors: {
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) callback(null, true);
+      else callback(new Error(`CORS error: Origin ${origin} not allowed`));
+    },
+    credentials: true
+  },
+  maxHttpBufferSize: 25 * 1024 * 1024
 });
 
 const signToken = (user) => jwt.sign(
@@ -153,7 +231,15 @@ const getConversation = (a, b) => {
 };
 
 app.get('/api/health', (_, res) => {
-  res.json({ ok: true, time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    status: 'healthy',
+    uptimeSec: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    usersCount: store.users.length,
+    activeSockets: socketsByUserId.size,
+    memoryUsageMB: Math.round(process.memoryUsage().rss / (1024 * 1024))
+  });
 });
 
 app.post('/api/login', async (req, res) => {
@@ -512,6 +598,69 @@ io.on('connection', (socket) => {
   });
 });
 
+// Serve production static frontend if available
+const candidateDistPaths = [
+  path.resolve(rootDir, '../client/dist'),
+  path.resolve(rootDir, 'dist'),
+  path.resolve(rootDir, 'client/dist')
+];
+
+const clientDistPath = candidateDistPaths.find((p) => fs.existsSync(p));
+if (clientDistPath) {
+  console.log(`[INFO] Serving production static frontend from: ${clientDistPath}`);
+  app.use(express.static(clientDistPath));
+
+  // SPA fallback for non-API routes
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) return next();
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+}
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error('[ERROR] Unhandled express error:', err);
+  const status = err.status || 500;
+  res.status(status).json({
+    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : (err.message || 'Server error')
+  });
+});
+
 httpServer.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+});
+
+// Graceful shutdown handling
+const gracefulShutdown = (signal) => {
+  console.log(`\n[${signal}] Initiating graceful shutdown...`);
+  try {
+    saveStore(store);
+    console.log('Data store saved cleanly.');
+  } catch (err) {
+    console.error('Failed to save store during shutdown:', err);
+  }
+
+  io.close(() => {
+    console.log('Socket.IO server closed.');
+    httpServer.close(() => {
+      console.log('HTTP server closed. Exiting process.');
+      process.exit(0);
+    });
+  });
+
+  setTimeout(() => {
+    console.error('Graceful shutdown timeout exceeded, forcing process exit.');
+    process.exit(1);
+  }, 7000);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('unhandledRejection', (reason) => {
+  console.error('[CRITICAL] Unhandled Promise Rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL] Uncaught Exception:', err);
+  try { saveStore(store); } catch {}
+  process.exit(1);
 });
