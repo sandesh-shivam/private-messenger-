@@ -264,16 +264,15 @@ app.post('/api/login', async (req, res) => {
 
   const token = signToken(user);
 
-  const oldSocketId = socketsByUserId.get(user.id);
-  if (oldSocketId) {
-    // Detach the previous socket before disconnecting it so its disconnect event
-    // cannot overwrite the newly authenticated session's online state.
-    socketsByUserId.delete(user.id);
-    const oldSocket = io.sockets.sockets.get(oldSocketId);
-    if (oldSocket) {
-      io.to(oldSocketId).emit('force-logout', { reason: 'Logged in from another device' });
-      oldSocket.disconnect(true);
-    }
+  const oldSockets = [...io.sockets.sockets.values()]
+    .filter((activeSocket) => activeSocket.user?.id === user.id);
+
+  // Detach the previous session before disconnecting any of its tabs. Its delayed
+  // disconnect handlers must not turn the new login's presence offline.
+  socketsByUserId.delete(user.id);
+  for (const oldSocket of oldSockets) {
+    oldSocket.emit('force-logout', { reason: 'Logged in from another device' });
+    oldSocket.disconnect(true);
   }
 
   res.json({
@@ -288,7 +287,6 @@ app.get('/api/me', authRequired, (req, res) => {
 });
 
 app.post('/api/logout', authRequired, (req, res) => {
-  const activeSocketId = socketsByUserId.get(req.user.id);
   const wentOffline = markUserOffline(req.user.id);
   req.user.sessionId = null;
   saveStore(store);
@@ -301,12 +299,11 @@ app.post('/api/logout', authRequired, (req, res) => {
     });
   }
 
-  if (activeSocketId) {
-    const activeSocket = io.sockets.sockets.get(activeSocketId);
-    if (activeSocket) {
-      activeSocket.emit('force-logout', { reason: 'Logged out' });
-      activeSocket.disconnect(true);
-    }
+  // Revoke every open tab/device using this session, not only the latest socket.
+  for (const activeSocket of [...io.sockets.sockets.values()]) {
+    if (activeSocket.user?.id !== req.user.id) continue;
+    activeSocket.emit('force-logout', { reason: 'Logged out' });
+    activeSocket.disconnect(true);
   }
 
   res.json({ ok: true });
@@ -620,16 +617,31 @@ io.on('connection', (socket) => {
   });
 
   socket.on('logout', () => {
-    const wentOffline = markUserOffline(user.id, socket.id);
-    if (wentOffline) {
-      io.emit('presence:update', { userId: user.id, online: false, lastSeen: user.lastSeen });
+    // Disconnect all tabs for the current authenticated session.
+    for (const activeSocket of [...io.sockets.sockets.values()]) {
+      if (activeSocket.user?.id !== user.id) continue;
+      activeSocket.emit('force-logout', { reason: 'Logged out' });
+      activeSocket.disconnect(true);
     }
-    socket.disconnect(true);
   });
 
   socket.on('disconnect', () => {
-    // Ignore disconnect events from a stale socket if this user has a newer
-    // active socket (for example, after a fast reconnect or session replacement).
+    // The disconnecting socket has already been removed from Socket.IO's live
+    // socket map. If another tab remains connected, keep the user online and
+    // point direct-delivery events at a socket that is still alive.
+    const remainingSockets = [...io.sockets.sockets.values()]
+      .filter((activeSocket) => activeSocket.user?.id === user.id);
+
+    if (remainingSockets.length > 0) {
+      const currentSocketId = socketsByUserId.get(user.id);
+      if (!io.sockets.sockets.has(currentSocketId)) {
+        socketsByUserId.set(user.id, remainingSockets[remainingSockets.length - 1].id);
+      }
+      return;
+    }
+
+    // Only the newest/current socket may mark a user offline. An old tab's
+    // delayed disconnect must not overwrite a replacement connection's status.
     const wentOffline = markUserOffline(user.id, socket.id);
     if (!wentOffline) return;
 
