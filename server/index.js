@@ -626,6 +626,12 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    // A login from another device rotates sessionId. Disconnect events from that
+    // obsolete session must not mark the replacement login offline.
+    if (user.enabled && user.sessionId && socket.payload?.sessionId !== user.sessionId) {
+      return;
+    }
+
     // The disconnecting socket has already been removed from Socket.IO's live
     // socket map. If another tab remains connected, keep the user online and
     // point direct-delivery events at a socket that is still alive.
