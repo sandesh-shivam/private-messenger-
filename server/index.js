@@ -23,6 +23,7 @@ import {
   initialsFromName,
   rootDir
 } from './store.js';
+import { reconcileStalePresence, markUserOfflineIfCurrent } from './presence.js';
 
 dotenv.config();
 
@@ -102,6 +103,14 @@ app.use('/api/', apiLimiter);
 app.use('/api/login', loginLimiter);
 
 let store = await ensureStore();
+
+// Presence is process-local (Socket.IO connections disappear on restart), but the
+// online flag is persisted with the JSON store. Reconcile it before accepting traffic.
+const staleOnlineCount = reconcileStalePresence(store, { persist: saveStore });
+if (staleOnlineCount > 0) {
+  console.log(`[PRESENCE] Startup reconciliation marked ${staleOnlineCount} stale online user(s) offline.`);
+}
+
 const socketsByUserId = new Map();
 
 const httpServer = http.createServer(app);
@@ -186,14 +195,13 @@ const markUserOnline = (userId, socketId = null) => {
   saveStore(store);
 };
 
-const markUserOffline = (userId) => {
-  const user = store.users.find((u) => u.id === userId);
-  if (!user) return;
-  user.online = false;
-  user.lastSeen = new Date().toISOString();
-  socketsByUserId.delete(userId);
-  saveStore(store);
-};
+const markUserOffline = (userId, socketId = null) => markUserOfflineIfCurrent({
+  store,
+  socketsByUserId,
+  userId,
+  socketId,
+  persist: saveStore
+});
 
 const getConversation = (a, b) => {
   const pair = getPairKey(a, b);
@@ -256,10 +264,15 @@ app.post('/api/login', async (req, res) => {
 
   const token = signToken(user);
 
-  const oldSocketId = socketsByUserId.get(user.id);
-  if (oldSocketId && io.sockets.sockets.get(oldSocketId)) {
-    io.to(oldSocketId).emit('force-logout', { reason: 'Logged in from another device' });
-    io.sockets.sockets.get(oldSocketId).disconnect(true);
+  const oldSockets = [...io.sockets.sockets.values()]
+    .filter((activeSocket) => activeSocket.user?.id === user.id);
+
+  // Detach the previous session before disconnecting any of its tabs. Its delayed
+  // disconnect handlers must not turn the new login's presence offline.
+  socketsByUserId.delete(user.id);
+  for (const oldSocket of oldSockets) {
+    oldSocket.emit('force-logout', { reason: 'Logged in from another device' });
+    oldSocket.disconnect(true);
   }
 
   res.json({
@@ -274,9 +287,25 @@ app.get('/api/me', authRequired, (req, res) => {
 });
 
 app.post('/api/logout', authRequired, (req, res) => {
-  markUserOffline(req.user.id);
+  const wentOffline = markUserOffline(req.user.id);
   req.user.sessionId = null;
   saveStore(store);
+
+  if (wentOffline) {
+    io.emit('presence:update', {
+      userId: req.user.id,
+      online: false,
+      lastSeen: req.user.lastSeen
+    });
+  }
+
+  // Revoke every open tab/device using this session, not only the latest socket.
+  for (const activeSocket of [...io.sockets.sockets.values()]) {
+    if (activeSocket.user?.id !== req.user.id) continue;
+    activeSocket.emit('force-logout', { reason: 'Logged out' });
+    activeSocket.disconnect(true);
+  }
+
   res.json({ ok: true });
 });
 
@@ -588,12 +617,40 @@ io.on('connection', (socket) => {
   });
 
   socket.on('logout', () => {
-    markUserOffline(user.id);
-    socket.disconnect(true);
+    // Disconnect all tabs for the current authenticated session.
+    for (const activeSocket of [...io.sockets.sockets.values()]) {
+      if (activeSocket.user?.id !== user.id) continue;
+      activeSocket.emit('force-logout', { reason: 'Logged out' });
+      activeSocket.disconnect(true);
+    }
   });
 
   socket.on('disconnect', () => {
-    markUserOffline(user.id);
+    // A login from another device rotates sessionId. Disconnect events from that
+    // obsolete session must not mark the replacement login offline.
+    if (user.enabled && user.sessionId && socket.payload?.sessionId !== user.sessionId) {
+      return;
+    }
+
+    // The disconnecting socket has already been removed from Socket.IO's live
+    // socket map. If another tab remains connected, keep the user online and
+    // point direct-delivery events at a socket that is still alive.
+    const remainingSockets = [...io.sockets.sockets.values()]
+      .filter((activeSocket) => activeSocket.user?.id === user.id);
+
+    if (remainingSockets.length > 0) {
+      const currentSocketId = socketsByUserId.get(user.id);
+      if (!io.sockets.sockets.has(currentSocketId)) {
+        socketsByUserId.set(user.id, remainingSockets[remainingSockets.length - 1].id);
+      }
+      return;
+    }
+
+    // Only the newest/current socket may mark a user offline. An old tab's
+    // delayed disconnect must not overwrite a replacement connection's status.
+    const wentOffline = markUserOffline(user.id, socket.id);
+    if (!wentOffline) return;
+
     io.emit('presence:update', { userId: user.id, online: false, lastSeen: user.lastSeen });
   });
 });
