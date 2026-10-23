@@ -4,3 +4,5 @@ server/data.json
 client/dist
 .env
 .DS_Store
+server/data.json.bak
+server/data.json.tmp
